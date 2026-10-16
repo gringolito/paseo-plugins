@@ -329,7 +329,7 @@ test("provider profiles from Paseo config add every CLAUDE_CONFIG_DIR and CODEX_
   } finally { index.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
-test("Oh My Pi sessions link to Paseo agents, nest subagents under their parent and follow agents into other session directories", async () => {
+test("Oh My Pi sessions link to Paseo agents, nest subagents under their parent, count forked subagent copies once and follow agents into other session directories", async () => {
   const root = await mkdtemp(join(tmpdir(), "session-usage-omp-"));
   const roots = { paseo: join(root, "paseo"), claude: join(root, "claude"), codex: join(root, "codex"), omp: join(root, "omp", "sessions"), data: join(root, "data"), cursor: [join(root, "cursor")] };
   const index = new UsageIndex(roots);
@@ -344,6 +344,11 @@ test("Oh My Pi sessions link to Paseo agents, nest subagents under their parent 
     await save(main, transcript("s1"));
     await save(join(main.slice(0, -6), "Review.jsonl"), transcript("child"));
     await save(join(main.slice(0, -6), "Review", "__advisor.jsonl"), transcript("grandchild"));
+    // A fork copies the parent's subagent transcripts, header and all, into its own directory.
+    const fork = join(roots.omp, "-worktree", "2026-10-02T12-00-00-000Z_s2.jsonl");
+    await save(fork, transcript("s2").replace("2026-10-01T12:00:00.000Z", "2026-10-02T12:00:00.000Z"));
+    await save(join(fork.slice(0, -6), "Review.jsonl"), transcript("child"));
+    await save(join(fork.slice(0, -6), "Review", "__advisor.jsonl"), transcript("grandchild"));
     const work = session(join(root, "work", "sessions"), "w1");
     await save(work, transcript("w1"));
     const agent = (id: string, provider: string, sessionId: string, nativeHandle: string) => save(join(roots.paseo, "agents", "bucket", `${id}.json`), JSON.stringify({ id, provider, cwd: "/worktree", title: id, createdAt: "2026-10-01", persistence: { sessionId, nativeHandle } }));
@@ -355,7 +360,8 @@ test("Oh My Pi sessions link to Paseo agents, nest subagents under their parent 
     const snapshot = await index.settled();
     SnapshotSchema.parse(snapshot);
     const byId = new Map(snapshot.sessions.map((s) => [s.id, s]));
-    assert.equal(snapshot.sessions.length, 4);
+    assert.equal(snapshot.sessions.length, 5);
+    assert.ok(!byId.has("omp:s2/Review") && !byId.has("omp:s2/Review/__advisor"), "copied subagents count once, under the original parent");
     assert.equal(byId.get("omp:s1")?.agentId, "main-agent");
     assert.equal(byId.get("omp:s1")?.providerLabel, "Oh My Pi");
     assert.equal(byId.get("omp:s1/Review")?.parentId, "omp:s1");

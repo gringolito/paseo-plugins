@@ -350,6 +350,9 @@ export class UsageIndex {
     const sources = await discover(this.roots, profiles, omp, warnings, this.controller.signal);
     this.state = { ...this.state, total: sources.length };
     const sessions: Session[] = [];
+    // A fork copies its parent's subagent transcripts unchanged into its own directory. Each Oh My Pi
+    // session ID counts once, from its fullest copy, then the earliest path (the original parent's).
+    const ompCopies = new Map<string, { session: Session; source: FileSource }>();
     let next = 0;
     const livePaths = new Set(sources.map((s) => s.path));
     const worker = async () => {
@@ -364,7 +367,13 @@ export class UsageIndex {
             this.cache.set(source.path, entry);
             changes.files.set(source.path, entry);
           }
-          sessions.push(joinSession(source, entry.parsed, metadata));
+          const session = joinSession(source, entry.parsed, metadata);
+          const headerId = source.provider === "omp" ? entry.parsed.nativeId : "";
+          if (!headerId) sessions.push(session);
+          else {
+            const previous = ompCopies.get(headerId);
+            if (!previous || previous.source.size < source.size || (previous.source.size === source.size && source.path < previous.source.path)) ompCopies.set(headerId, { session, source });
+          }
         } catch {
           if (this.controller.signal.aborted) return;
           const session = joinSession(source, { nativeId: source.nativeId, parentId: source.parentId, cwd: "", title: "", branch: "", startedAt: null, endedAt: null, buckets: [], warnings: ["Transcript could not be read."] }, metadata);
@@ -376,6 +385,7 @@ export class UsageIndex {
     };
     await Promise.all(Array.from({ length: Math.min(4, sources.length) }, worker));
     if (this.controller.signal.aborted) throw new Error("Scan cancelled");
+    for (const { session } of ompCopies.values()) sessions.push(session);
     const readable = new Set(["claude", "codex", ...profiles.map((profile) => profile.id), ...omp.map((root) => root.id)]);
     sessions.push(...await this.readStores(metadata, warnings, readable, changes));
     const seen = new Set(sessions.map((s) => s.id));
